@@ -8,12 +8,18 @@ developers (Standardization Over Configuration).
 
 | Workflow | Purpose |
 |---|---|
-| `deploy.yml` | Write `image.tag` into a tenant's `values.yaml` in `platform-config` and commit. |
-| `offboard.yml` | Delete a tenant/app directory → ArgoCD cascades cleanup. |
-| `list-tenants.yml` | List tenants that have a given app configured. |
+| `deploy.yml` | Auto-locate a tenant across clusters (`tenants/*/<tenant>/<app>`), write `image.tag` into its `values.yaml`, and commit. |
+| `offboard.yml` | Locate and delete a tenant/app directory → ArgoCD cascades the cleanup. |
+| `list-tenants.yml` | List `cluster / tenant` pairs that run a given app. |
 
-All three write to [`platform-config`](https://github.com/kanzalqalandri/platform-config)
-using the `PLATFORM_CONFIG_TOKEN` secret.
+All three:
+- write to [`platform-config`](https://github.com/kanzalqalandri/platform-config)
+  using the `PLATFORM_CONFIG_TOKEN` secret;
+- take **`tenant` + `app`** (no `environment`/`cluster` input — the cluster is
+  derived from where the tenant lives);
+- commit with the change **authored by the triggering user** (`github.triggering_actor`,
+  committer = `github-actions[bot]`) plus a `Triggered-by:` / `Source-run:` link
+  for auditability.
 
 > Phase 2: `deploy-canary.yml` / `adjust-canary.yml` / `finalize-canary.yml`
 > (Cilium Gateway API + Argo Rollouts) plug in here without changing the app repos.
