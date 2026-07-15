@@ -1,0 +1,68 @@
+name: Deploy (reusable)
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      tenant:
+        required: true
+        type: string
+      app:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+    secrets:
+      PLATFORM_CONFIG_TOKEN:
+        description: 'Token with write access to platform-config'
+        required: true
+
+# Platform-owned CD. Engineers cannot modify this. It only ever writes values.yaml
+# and commits — it never assumes what the chart renders (keeps the design modular).
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout platform-config
+        uses: actions/checkout@v4
+        with:
+          repository: kanzalqalandri/platform-config
+          token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
+
+      - name: Validate tenant/app exists (server-side)
+        run: |
+          DIR="envs/${{ inputs.environment }}/${{ inputs.tenant }}/${{ inputs.app }}"
+          if [ ! -d "$DIR" ]; then
+            echo "::error::Not found: $DIR"
+            echo "Available tenants in ${{ inputs.environment }} for ${{ inputs.app }}:"
+            for d in envs/${{ inputs.environment }}/*/${{ inputs.app }}; do
+              [ -d "$d" ] && basename "$(dirname "$d")"
+            done
+            exit 1
+          fi
+
+      - name: Update image tag
+        run: |
+          VF="envs/${{ inputs.environment }}/${{ inputs.tenant }}/${{ inputs.app }}/values.yaml"
+          yq -i '.image.tag = "${{ inputs.image_tag }}"' "$VF"
+          echo "Updated $VF:"; cat "$VF"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --staged --quiet && echo "No changes" && exit 0
+          git commit -m "deploy(${{ inputs.environment }}): ${{ inputs.app }}@${{ inputs.image_tag }} -> ${{ inputs.tenant }}"
+          git push
+
+      - name: Summary
+        run: |
+          echo "## Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- **App:** ${{ inputs.app }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tenant:** ${{ inputs.tenant }} (${{ inputs.environment }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image tag:** ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will auto-sync the committed change onto the cluster." >> $GITHUB_STEP_SUMMARY

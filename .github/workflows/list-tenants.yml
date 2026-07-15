@@ -1,0 +1,30 @@
+name: List Tenants (reusable)
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      app:
+        required: true
+        type: string
+    secrets:
+      PLATFORM_CONFIG_TOKEN:
+        required: true
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout platform-config
+        uses: actions/checkout@v4
+        with:
+          repository: kanzalqalandri/platform-config
+          token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
+
+      - name: List tenants
+        run: |
+          echo "### Tenants with ${{ inputs.app }} in ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          for d in envs/${{ inputs.environment }}/*/${{ inputs.app }}; do
+            [ -d "$d" ] && echo "- \`$(basename "$(dirname "$d")")\`" >> $GITHUB_STEP_SUMMARY
+          done

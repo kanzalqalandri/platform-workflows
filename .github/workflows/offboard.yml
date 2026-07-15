@@ -1,0 +1,46 @@
+name: Offboard (reusable)
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      tenant:
+        required: true
+        type: string
+      app:
+        required: true
+        type: string
+    secrets:
+      PLATFORM_CONFIG_TOKEN:
+        required: true
+
+# Lifecycle & Cleanup pillar: offboarding is symmetric with deploy.
+# Deleting the directory removes the config.yaml -> the ApplicationSet deletes the
+# generated Application -> its resources-finalizer cascades the k8s cleanup.
+jobs:
+  offboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout platform-config
+        uses: actions/checkout@v4
+        with:
+          repository: kanzalqalandri/platform-config
+          token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
+
+      - name: Remove tenant/app directory
+        run: |
+          DIR="envs/${{ inputs.environment }}/${{ inputs.tenant }}/${{ inputs.app }}"
+          if [ ! -d "$DIR" ]; then
+            echo "::warning::Nothing to offboard: $DIR does not exist"
+            exit 0
+          fi
+          git rm -r "$DIR"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --staged --quiet && echo "No changes" && exit 0
+          git commit -m "offboard(${{ inputs.environment }}): ${{ inputs.app }} from ${{ inputs.tenant }}"
+          git push
