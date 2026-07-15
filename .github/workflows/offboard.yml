@@ -38,9 +38,17 @@ jobs:
           git rm -r "$DIR"
 
       - name: Commit and push
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git diff --staged --quiet && echo "No changes" && exit 0
-          git commit -m "offboard(${{ inputs.environment }}): ${{ inputs.app }} from ${{ inputs.tenant }}"
+          git commit \
+            --author="${ACTOR} <${ACTOR_ID}+${ACTOR}@users.noreply.github.com>" \
+            -m "offboard(${{ inputs.environment }}): ${{ inputs.app }} from ${{ inputs.tenant }}" \
+            -m "Triggered-by: @${ACTOR}" \
+            -m "Source-run: ${RUN_URL}"
           git push
