@@ -2,9 +2,6 @@ name: Offboard (reusable)
 on:
   workflow_call:
     inputs:
-      environment:
-        required: true
-        type: string
       tenant:
         required: true
         type: string
@@ -18,6 +15,7 @@ on:
 # Lifecycle & Cleanup pillar: offboarding is symmetric with deploy.
 # Deleting the directory removes the config.yaml -> the ApplicationSet deletes the
 # generated Application -> its resources-finalizer cascades the k8s cleanup.
+# Layout: tenants/<cluster>/<tenant>/<app>/ — auto-located across clusters.
 jobs:
   offboard:
     runs-on: ubuntu-latest
@@ -28,13 +26,15 @@ jobs:
           repository: kanzalqalandri/platform-config
           token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
 
-      - name: Remove tenant/app directory
+      - name: Locate and remove tenant/app directory
+        id: loc
         run: |
-          DIR="envs/${{ inputs.environment }}/${{ inputs.tenant }}/${{ inputs.app }}"
-          if [ ! -d "$DIR" ]; then
-            echo "::warning::Nothing to offboard: $DIR does not exist"
+          DIR=$(ls -d tenants/*/${{ inputs.tenant }}/${{ inputs.app }} 2>/dev/null | head -1 || true)
+          if [ -z "$DIR" ]; then
+            echo "::warning::Nothing to offboard: tenants/*/${{ inputs.tenant }}/${{ inputs.app }} not found"
             exit 0
           fi
+          echo "cluster=$(echo "$DIR" | cut -d/ -f2)" >> $GITHUB_OUTPUT
           git rm -r "$DIR"
 
       - name: Commit and push
@@ -42,13 +42,14 @@ jobs:
           ACTOR: ${{ github.triggering_actor }}
           ACTOR_ID: ${{ github.actor_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CLUSTER: ${{ steps.loc.outputs.cluster }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git diff --staged --quiet && echo "No changes" && exit 0
           git commit \
             --author="${ACTOR} <${ACTOR_ID}+${ACTOR}@users.noreply.github.com>" \
-            -m "offboard(${{ inputs.environment }}): ${{ inputs.app }} from ${{ inputs.tenant }}" \
+            -m "offboard(${CLUSTER}): ${{ inputs.app }} from ${{ inputs.tenant }}" \
             -m "Triggered-by: @${ACTOR}" \
             -m "Source-run: ${RUN_URL}"
           git push

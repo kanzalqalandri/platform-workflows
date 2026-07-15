@@ -2,9 +2,6 @@ name: List Tenants (reusable)
 on:
   workflow_call:
     inputs:
-      environment:
-        required: true
-        type: string
       app:
         required: true
         type: string
@@ -24,7 +21,10 @@ jobs:
 
       - name: List tenants
         run: |
-          echo "### Tenants with ${{ inputs.app }} in ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          for d in envs/${{ inputs.environment }}/*/${{ inputs.app }}; do
-            [ -d "$d" ] && echo "- \`$(basename "$(dirname "$d")")\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Tenants running ${{ inputs.app }} (cluster / tenant)" >> $GITHUB_STEP_SUMMARY
+          for d in tenants/*/*/${{ inputs.app }}; do
+            [ -d "$d" ] || continue
+            CLUSTER=$(echo "$d" | cut -d/ -f2)
+            TENANT=$(echo "$d" | cut -d/ -f3)
+            echo "- \`$CLUSTER\` / \`$TENANT\`" >> $GITHUB_STEP_SUMMARY
           done

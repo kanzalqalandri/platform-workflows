@@ -2,9 +2,6 @@ name: Deploy (reusable)
 on:
   workflow_call:
     inputs:
-      environment:
-        required: true
-        type: string
       tenant:
         required: true
         type: string
@@ -21,6 +18,8 @@ on:
 
 # Platform-owned CD. Engineers cannot modify this. It only ever writes values.yaml
 # and commits — it never assumes what the chart renders (keeps the design modular).
+# Layout: tenants/<cluster>/<tenant>/<app>/values.yaml — the workflow auto-locates
+# the tenant across clusters, so the caller only supplies tenant + app + image_tag.
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -31,23 +30,29 @@ jobs:
           repository: kanzalqalandri/platform-config
           token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
 
-      - name: Validate tenant/app exists (server-side)
+      - name: Locate tenant values file
+        id: loc
         run: |
-          DIR="envs/${{ inputs.environment }}/${{ inputs.tenant }}/${{ inputs.app }}"
-          if [ ! -d "$DIR" ]; then
-            echo "::error::Not found: $DIR"
-            echo "Available tenants in ${{ inputs.environment }} for ${{ inputs.app }}:"
-            for d in envs/${{ inputs.environment }}/*/${{ inputs.app }}; do
-              [ -d "$d" ] && basename "$(dirname "$d")"
-            done
+          MATCHES=$(ls tenants/*/${{ inputs.tenant }}/${{ inputs.app }}/values.yaml 2>/dev/null || true)
+          COUNT=$(printf '%s\n' "$MATCHES" | grep -c . || true)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No values file for tenant '${{ inputs.tenant }}' app '${{ inputs.app }}'."
+            echo "Known <cluster>/<tenant> pairs:"; ls -d tenants/*/*/ 2>/dev/null | sed 's#tenants/##;s#/$##'
             exit 1
           fi
+          if [ "$COUNT" -gt 1 ]; then
+            echo "::error::Tenant '${{ inputs.tenant }}' exists on multiple clusters:"; echo "$MATCHES"
+            exit 1
+          fi
+          CLUSTER=$(echo "$MATCHES" | cut -d/ -f2)
+          echo "vf=$MATCHES" >> $GITHUB_OUTPUT
+          echo "cluster=$CLUSTER" >> $GITHUB_OUTPUT
+          echo "Resolved ${{ inputs.tenant }}/${{ inputs.app }} -> $MATCHES (cluster: $CLUSTER)"
 
       - name: Update image tag
         run: |
-          VF="envs/${{ inputs.environment }}/${{ inputs.tenant }}/${{ inputs.app }}/values.yaml"
-          yq -i '.image.tag = "${{ inputs.image_tag }}"' "$VF"
-          echo "Updated $VF:"; cat "$VF"
+          yq -i '.image.tag = "${{ inputs.image_tag }}"' "${{ steps.loc.outputs.vf }}"
+          echo "Updated ${{ steps.loc.outputs.vf }}:"; cat "${{ steps.loc.outputs.vf }}"
 
       - name: Commit and push
         env:
@@ -55,6 +60,7 @@ jobs:
           ACTOR: ${{ github.triggering_actor }}
           ACTOR_ID: ${{ github.actor_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CLUSTER: ${{ steps.loc.outputs.cluster }}
         run: |
           # committer = the automation; author = the human who requested it (attribution)
           git config user.name "github-actions[bot]"
@@ -63,7 +69,7 @@ jobs:
           git diff --staged --quiet && echo "No changes" && exit 0
           git commit \
             --author="${ACTOR} <${ACTOR_ID}+${ACTOR}@users.noreply.github.com>" \
-            -m "deploy(${{ inputs.environment }}): ${{ inputs.app }}@${{ inputs.image_tag }} -> ${{ inputs.tenant }}" \
+            -m "deploy(${CLUSTER}): ${{ inputs.app }}@${{ inputs.image_tag }} -> ${{ inputs.tenant }}" \
             -m "Triggered-by: @${ACTOR}" \
             -m "Source-run: ${RUN_URL}"
           git push
@@ -72,7 +78,7 @@ jobs:
         run: |
           echo "## Deployed" >> $GITHUB_STEP_SUMMARY
           echo "- **App:** ${{ inputs.app }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tenant:** ${{ inputs.tenant }} (${{ inputs.environment }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tenant:** ${{ inputs.tenant }} (cluster: ${{ steps.loc.outputs.cluster }})" >> $GITHUB_STEP_SUMMARY
           echo "- **Image tag:** ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** @${{ github.triggering_actor }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
