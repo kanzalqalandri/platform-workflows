@@ -1,7 +1,12 @@
-name: List Tenants (reusable)
+name: List Deployments (reusable)
 on:
   workflow_call:
     inputs:
+      plane:
+        description: 'Config plane: tenants | powergrader'
+        required: false
+        default: tenants
+        type: string
       app:
         required: true
         type: string
@@ -19,12 +24,13 @@ jobs:
           repository: kanzalqalandri/platform-config
           token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
 
-      - name: List tenants
+      - name: List
         run: |
-          echo "### Tenants running ${{ inputs.app }} (cluster / tenant)" >> $GITHUB_STEP_SUMMARY
-          for d in tenants/*/*/${{ inputs.app }}; do
+          echo "### ${{ inputs.plane }} deployments of ${{ inputs.app }} (cluster / target)" >> $GITHUB_STEP_SUMMARY
+          FOUND=0
+          for d in ${{ inputs.plane }}/*/*/${{ inputs.app }}; do
             [ -d "$d" ] || continue
-            CLUSTER=$(echo "$d" | cut -d/ -f2)
-            TENANT=$(echo "$d" | cut -d/ -f3)
-            echo "- \`$CLUSTER\` / \`$TENANT\`" >> $GITHUB_STEP_SUMMARY
+            FOUND=1
+            echo "- \`$(echo "$d" | cut -d/ -f2)\` / \`$(echo "$d" | cut -d/ -f3)\`" >> $GITHUB_STEP_SUMMARY
           done
+          [ "$FOUND" = 0 ] && echo "_(none — is the plane correct?)_" >> $GITHUB_STEP_SUMMARY || true

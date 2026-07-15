@@ -2,7 +2,13 @@ name: Offboard (reusable)
 on:
   workflow_call:
     inputs:
-      tenant:
+      plane:
+        description: 'Config plane: tenants | powergrader'
+        required: false
+        default: tenants
+        type: string
+      key:
+        description: 'Middle path segment — tenant id (tenants) or env (powergrader)'
         required: true
         type: string
       app:
@@ -15,7 +21,7 @@ on:
 # Lifecycle & Cleanup pillar: offboarding is symmetric with deploy.
 # Deleting the directory removes the config.yaml -> the ApplicationSet deletes the
 # generated Application -> its resources-finalizer cascades the k8s cleanup.
-# Layout: tenants/<cluster>/<tenant>/<app>/ — auto-located across clusters.
+# Plane-aware: <plane>/<cluster>/<key>/<app>/ (tenants: key=tenant; powergrader: key=env).
 jobs:
   offboard:
     runs-on: ubuntu-latest
@@ -26,12 +32,19 @@ jobs:
           repository: kanzalqalandri/platform-config
           token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
 
-      - name: Locate and remove tenant/app directory
+      - name: Validate plane
+        run: |
+          case "${{ inputs.plane }}" in
+            tenants|powergrader) : ;;
+            *) echo "::error::Unknown plane '${{ inputs.plane }}' (allowed: tenants, powergrader)"; exit 1 ;;
+          esac
+
+      - name: Locate and remove directory
         id: loc
         run: |
-          DIR=$(ls -d tenants/*/${{ inputs.tenant }}/${{ inputs.app }} 2>/dev/null | head -1 || true)
+          DIR=$(ls -d ${{ inputs.plane }}/*/${{ inputs.key }}/${{ inputs.app }} 2>/dev/null | head -1 || true)
           if [ -z "$DIR" ]; then
-            echo "::warning::Nothing to offboard: tenants/*/${{ inputs.tenant }}/${{ inputs.app }} not found"
+            echo "::warning::Nothing to offboard: ${{ inputs.plane }}/*/${{ inputs.key }}/${{ inputs.app }} not found"
             exit 0
           fi
           echo "cluster=$(echo "$DIR" | cut -d/ -f2)" >> $GITHUB_OUTPUT
@@ -49,7 +62,7 @@ jobs:
           git diff --staged --quiet && echo "No changes" && exit 0
           git commit \
             --author="${ACTOR} <${ACTOR_ID}+${ACTOR}@users.noreply.github.com>" \
-            -m "offboard(${CLUSTER}): ${{ inputs.app }} from ${{ inputs.tenant }}" \
+            -m "offboard(${{ inputs.plane }}/${CLUSTER}): ${{ inputs.app }} from ${{ inputs.key }}" \
             -m "Triggered-by: @${ACTOR}" \
             -m "Source-run: ${RUN_URL}"
           git push

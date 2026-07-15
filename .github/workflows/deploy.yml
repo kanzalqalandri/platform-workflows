@@ -2,7 +2,13 @@ name: Deploy (reusable)
 on:
   workflow_call:
     inputs:
-      tenant:
+      plane:
+        description: 'Config plane: tenants | powergrader'
+        required: false
+        default: tenants
+        type: string
+      key:
+        description: 'Middle path segment — tenant id (tenants) or env (powergrader)'
         required: true
         type: string
       app:
@@ -16,10 +22,9 @@ on:
         description: 'Token with write access to platform-config'
         required: true
 
-# Platform-owned CD. Engineers cannot modify this. It only ever writes values.yaml
-# and commits — it never assumes what the chart renders (keeps the design modular).
-# Layout: tenants/<cluster>/<tenant>/<app>/values.yaml — the workflow auto-locates
-# the tenant across clusters, so the caller only supplies tenant + app + image_tag.
+# Platform-owned CD. Plane-aware: works for any plane laid out as
+# <plane>/<cluster>/<key>/<app>/ (tenants: key=tenant; powergrader: key=env).
+# It only ever writes values.yaml and commits.
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -30,24 +35,30 @@ jobs:
           repository: kanzalqalandri/platform-config
           token: ${{ secrets.PLATFORM_CONFIG_TOKEN }}
 
-      - name: Locate tenant values file
+      - name: Validate plane
+        run: |
+          case "${{ inputs.plane }}" in
+            tenants|powergrader) : ;;
+            *) echo "::error::Unknown plane '${{ inputs.plane }}' (allowed: tenants, powergrader)"; exit 1 ;;
+          esac
+
+      - name: Locate values file
         id: loc
         run: |
-          MATCHES=$(ls tenants/*/${{ inputs.tenant }}/${{ inputs.app }}/values.yaml 2>/dev/null || true)
+          MATCHES=$(ls ${{ inputs.plane }}/*/${{ inputs.key }}/${{ inputs.app }}/values.yaml 2>/dev/null || true)
           COUNT=$(printf '%s\n' "$MATCHES" | grep -c . || true)
           if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No values file for tenant '${{ inputs.tenant }}' app '${{ inputs.app }}'."
-            echo "Known <cluster>/<tenant> pairs:"; ls -d tenants/*/*/ 2>/dev/null | sed 's#tenants/##;s#/$##'
+            echo "::error::No values file for ${{ inputs.plane }}/*/${{ inputs.key }}/${{ inputs.app }}"
+            echo "Known <cluster>/<key> for ${{ inputs.app }} in plane ${{ inputs.plane }}:"
+            ls -d ${{ inputs.plane }}/*/*/${{ inputs.app }} 2>/dev/null | sed "s#${{ inputs.plane }}/##;s#/${{ inputs.app }}##"
             exit 1
           fi
           if [ "$COUNT" -gt 1 ]; then
-            echo "::error::Tenant '${{ inputs.tenant }}' exists on multiple clusters:"; echo "$MATCHES"
-            exit 1
+            echo "::error::'${{ inputs.key }}' matches multiple clusters:"; echo "$MATCHES"; exit 1
           fi
-          CLUSTER=$(echo "$MATCHES" | cut -d/ -f2)
           echo "vf=$MATCHES" >> $GITHUB_OUTPUT
-          echo "cluster=$CLUSTER" >> $GITHUB_OUTPUT
-          echo "Resolved ${{ inputs.tenant }}/${{ inputs.app }} -> $MATCHES (cluster: $CLUSTER)"
+          echo "cluster=$(echo "$MATCHES" | cut -d/ -f2)" >> $GITHUB_OUTPUT
+          echo "Resolved ${{ inputs.plane }}/${{ inputs.key }}/${{ inputs.app }} -> $MATCHES"
 
       - name: Update image tag
         run: |
@@ -56,20 +67,18 @@ jobs:
 
       - name: Commit and push
         env:
-          # github.triggering_actor = the human who clicked "Run workflow" (accurate on re-runs too)
           ACTOR: ${{ github.triggering_actor }}
           ACTOR_ID: ${{ github.actor_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CLUSTER: ${{ steps.loc.outputs.cluster }}
         run: |
-          # committer = the automation; author = the human who requested it (attribution)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
           git diff --staged --quiet && echo "No changes" && exit 0
           git commit \
             --author="${ACTOR} <${ACTOR_ID}+${ACTOR}@users.noreply.github.com>" \
-            -m "deploy(${CLUSTER}): ${{ inputs.app }}@${{ inputs.image_tag }} -> ${{ inputs.tenant }}" \
+            -m "deploy(${{ inputs.plane }}/${CLUSTER}): ${{ inputs.app }}@${{ inputs.image_tag }} -> ${{ inputs.key }}" \
             -m "Triggered-by: @${ACTOR}" \
             -m "Source-run: ${RUN_URL}"
           git push
@@ -77,9 +86,8 @@ jobs:
       - name: Summary
         run: |
           echo "## Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Plane:** ${{ inputs.plane }}" >> $GITHUB_STEP_SUMMARY
           echo "- **App:** ${{ inputs.app }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tenant:** ${{ inputs.tenant }} (cluster: ${{ steps.loc.outputs.cluster }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** ${{ inputs.key }} (cluster: ${{ steps.loc.outputs.cluster }})" >> $GITHUB_STEP_SUMMARY
           echo "- **Image tag:** ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** @${{ github.triggering_actor }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "ArgoCD will auto-sync the committed change onto the cluster." >> $GITHUB_STEP_SUMMARY
